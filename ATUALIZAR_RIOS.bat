@@ -1,0 +1,3 @@
+@echo off
+echo Executando monitoramento dos rios...
+python C:\Users\emill\Desktop\monitorar_rios.py

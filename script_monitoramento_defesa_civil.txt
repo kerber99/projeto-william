@@ -1,0 +1,157 @@
+﻿================================================================================
+SCRIPT GOOGLE APPS SCRIPT (NATIVO DO GOOGLE PLANILHAS)
+================================================================================
+Como instalar no Google Sheets:
+1. Abra a sua Planilha no Google Drive.
+2. Clique no menu superior em ExtensÃµes > Apps Script.
+3. Apague qualquer cÃ³digo existente no editor e cole todo o cÃ³digo abaixo.
+4. Clique no Ã­cone de Salvar (imagem do disco).
+5. Selecione a funÃ§Ã£o 'configurarAgendamentoDeUmaHora' no menu superior do editor e clique em 'Executar'.
+6. Autorize a execuÃ§Ã£o com a sua conta Google.
+Pronto! A planilha irÃ¡ consultar a Defesa Civil e atualizar as abas a cada 1 hora.
+================================================================================
+
+/**
+ * Monitoramento HidrometeorolÃ³gico - Defesa Civil RS
+ * Atualiza o nÃ­vel do rio a cada 1 hora para as abas: Esteio, SÃ£o Leopoldo e AraricÃ¡/Sapiranga/Taquara.
+ */
+
+const STATIONS_CONFIG = [
+  { code: 'DCRS-00119', sheetName: 'Esteio', label: 'Est. DCRS 119 - Esteio' },
+  { code: 'DCRS-00070', sheetName: 'SÃ£o Leopoldo', label: 'Est. DCRS 070 - SÃ£o Leopoldo' },
+  { code: 'DCRS-00003', sheetName: 'AraricÃ¡/Sapiranga/Taquara', label: 'Est. DCRS 003 - AraricÃ¡/Sapiranga/Taquara' }
+];
+
+const GRAPHQL_URL = 'https://redehidrometeorologica.defesacivil.rs.gov.br/graphql';
+
+function monitorarNivelRio() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  const query = 
+    query Tags_data {
+      tags_data(clients: ["casa-militar-defesa-civil-rs"]) {
+        qualle_meteorologia {
+          codigo
+          name {
+            prefix
+            general
+            local
+          }
+          timestamp
+          data {
+            rio {
+              rio_nome { value }
+              rio_nivel { value }
+              rio_nivel_tendencia { value }
+            }
+          }
+        }
+      }
+    }
+  ;
+
+  const payload = JSON.stringify({ query: query });
+  
+  const options = {
+    method: 'post',
+    contentType: 'application/json',
+    payload: payload,
+    muteHttpExceptions: true
+  };
+
+  try {
+    const response = UrlFetchApp.fetch(GRAPHQL_URL, options);
+    const json = JSON.parse(response.getContentText());
+    
+    if (!json.data || !json.data.tags_data || !json.data.tags_data.qualle_meteorologia) {
+      Logger.log("Erro: resposta da API da Defesa Civil invÃ¡lida.");
+      return;
+    }
+    
+    const stationsData = json.data.tags_data.qualle_meteorologia;
+    const stationsMap = {};
+    stationsData.forEach(st => {
+      stationsMap[st.codigo] = st;
+    });
+
+    STATIONS_CONFIG.forEach(config => {
+      let sheet = ss.getSheetByName(config.sheetName);
+      
+      if (!sheet) {
+        const allSheets = ss.getSheets();
+        sheet = allSheets.find(s => s.getName().trim().toLowerCase() === config.sheetName.toLowerCase());
+      }
+      
+      if (!sheet) {
+        sheet = ss.insertSheet(config.sheetName);
+      }
+
+      if (sheet.getLastRow() === 0) {
+        sheet.appendRow([
+          'Data/Hora da Leitura',
+          'EstaÃ§Ã£o',
+          'CÃ³digo DCRS',
+          'NÃ­vel do Rio (m)',
+          'TendÃªncia',
+          'Data/Hora da Coleta'
+        ]);
+        sheet.getRange(1, 1, 1, 6).setFontWeight('bold').setBackground('#F3F4F6');
+      }
+
+      const stData = stationsMap[config.code];
+      if (stData) {
+        const timestampIso = stData.timestamp;
+        const timestampFormatted = new Date(timestampIso).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+        const nowFormatted = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+        
+        const rioNivel = stData.data && stData.data.rio && stData.data.rio.rio_nivel ? parseFloat(stData.data.rio.rio_nivel.value) : null;
+        const tendencia = stData.data && stData.data.rio && stData.data.rio.rio_nivel_tendencia ? parseFloat(stData.data.rio.rio_nivel_tendencia.value) : null;
+        
+        const nivelFormatado = rioNivel !== null ? rioNivel.toFixed(2).replace('.', ',') : 'N/A';
+        const tendenciaFormatada = tendencia !== null ? tendencia.toFixed(4).replace('.', ',') : 'N/A';
+
+        const lastRow = sheet.getLastRow();
+        let isDuplicate = false;
+        if (lastRow > 1) {
+          const lastTimestamp = sheet.getRange(lastRow, 1).getValue();
+          if (String(lastTimestamp) === String(timestampFormatted)) {
+            isDuplicate = true;
+          }
+        }
+
+        if (!isDuplicate) {
+          sheet.appendRow([
+            timestampFormatted,
+            config.label,
+            config.code,
+            nivelFormatado,
+            tendenciaFormatada,
+            nowFormatted
+          ]);
+          Logger.log("Inserido em [" + sheet.getName() + "]: NÃ­vel = " + nivelFormatado + " m");
+        } else {
+          Logger.log("Registro repetido ignorado em [" + config.label + "]");
+        }
+      }
+    });
+
+  } catch (e) {
+    Logger.log("Erro na execuÃ§Ã£o: " + e.toString());
+  }
+}
+
+function configurarAgendamentoDeUmaHora() {
+  const triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(t => {
+    if (t.getHandlerFunction() === 'monitorarNivelRio') {
+      ScriptApp.deleteTrigger(t);
+    }
+  });
+
+  ScriptApp.newTrigger('monitorarNivelRio')
+    .timeBased()
+    .everyHours(1)
+    .create();
+    
+  Logger.log("Gatilho ativado! A planilha serÃ¡ atualizada a cada 1 hora.");
+}

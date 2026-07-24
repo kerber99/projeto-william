@@ -1,0 +1,76 @@
+﻿================================================================================
+SCRIPT PYTHON (EXECUÃ‡ÃƒO LOCAL / SERVIDOR)
+================================================================================
+
+import requests
+import json
+from datetime import datetime
+import urllib3
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+GRAPHQL_URL = "https://redehidrometeorologica.defesacivil.rs.gov.br/graphql"
+
+STATIONS = [
+    {"code": "DCRS-00119", "sheet": "Esteio", "name": "Est. DCRS 119 - Esteio"},
+    {"code": "DCRS-00070", "sheet": "SÃ£o Leopoldo", "name": "Est. DCRS 070 - SÃ£o Leopoldo"},
+    {"code": "DCRS-00003", "sheet": "AraricÃ¡/Sapiranga/Taquara", "name": "Est. DCRS 003 - AraricÃ¡/Sapiranga/Taquara"}
+]
+
+QUERY = """
+query Tags_data {
+  tags_data(clients: ["casa-militar-defesa-civil-rs"]) {
+    qualle_meteorologia {
+      codigo
+      name {
+        prefix
+        general
+        local
+      }
+      timestamp
+      data {
+        rio {
+          rio_nome { value }
+          rio_nivel { value }
+          rio_nivel_tendencia { value }
+        }
+      }
+    }
+  }
+}
+"""
+
+def consultar_estacoes():
+    headers = {"Content-Type": "application/json"}
+    response = requests.post(GRAPHQL_URL, json={"query": QUERY}, headers=headers, verify=False, timeout=15)
+    response.raise_for_status()
+    
+    qualle = response.json().get("data", {}).get("tags_data", {}).get("qualle_meteorologia", [])
+    stations_map = {item["codigo"]: item for item in qualle}
+    
+    dados_coletados = []
+    for st in STATIONS:
+        code = st["code"]
+        if code in stations_map:
+            st_info = stations_map[code]
+            rio_info = st_info.get("data", {}).get("rio", {})
+            
+            nivel = rio_info.get("rio_nivel", {}).get("value")
+            tendencia = rio_info.get("rio_nivel_tendencia", {}).get("value")
+            
+            dados_coletados.append({
+                "aba": st["sheet"],
+                "estacao": st["name"],
+                "codigo": code,
+                "timestamp_leitura": st_info.get("timestamp"),
+                "nivel_m": round(float(nivel), 2) if nivel is not None else None,
+                "tendencia": round(float(tendencia), 4) if tendencia is not None else None,
+                "data_coleta": datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+            })
+            
+    return dados_coletados
+
+if __name__ == "__main__":
+    registros = consultar_estacoes()
+    for reg in registros:
+        print(f"[{reg['aba']}] NÃ­vel: {reg['nivel_m']}m | TendÃªncia: {reg['tendencia']} | Leitura: {reg['timestamp_leitura']}")

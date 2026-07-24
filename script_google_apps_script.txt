@@ -1,0 +1,71 @@
+function doPost(e) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  function formatName(str) {
+    return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+  }
+  
+  try {
+    var dados = JSON.parse(e.postData.contents);
+    var allSheets = ss.getSheets();
+    
+    for (var i = 0; i < dados.length; i++) {
+      var config = dados[i];
+      var sheet = null;
+      var targetName = formatName(config.sheet);
+      
+      for (var k = 0; k < allSheets.length; k++) {
+        if (formatName(allSheets[k].getName()) === targetName) {
+          sheet = allSheets[k];
+          break;
+        }
+      }
+      
+      if (!sheet) continue;
+
+      // Pega o timestamp "dd/MM/yyyy HH:mm:ss" e corta para "dd/MM/yyyy HH:mm"
+      var timeWithoutSeconds = "";
+      if (config.time && config.time.length >= 16) {
+        timeWithoutSeconds = config.time.substring(0, 16);
+      }
+      
+      var dataRange = sheet.getDataRange();
+      var displayValues = dataRange.getDisplayValues();
+      var rowToUpdate = -1;
+
+      // 1. Tenta encontrar a linha exata pela Data e Hora na Coluna A
+      if (timeWithoutSeconds !== "") {
+        for (var r = 0; r < displayValues.length; r++) {
+          var colA = displayValues[r][0];
+          if (colA && colA.indexOf(timeWithoutSeconds) > -1) {
+            rowToUpdate = r + 1;
+            break;
+          }
+        }
+      }
+
+      // 2. Se achou a hora exata, preenche.
+      if (rowToUpdate !== -1) {
+        sheet.getRange(rowToUpdate, 2).setValue(config.nivel);
+        sheet.getRange(rowToUpdate, 3).setValue(config.tendencia);
+      } else {
+        // 3. Se não achou a hora exata, procura a primeira linha que tem Data, mas o Nível está VAZIO
+        for (var r = 1; r < displayValues.length; r++) {
+          var colA = displayValues[r][0];
+          var colB = displayValues[r][1];
+          
+          if (colA !== "" && (colB === "" || colB === null)) {
+            sheet.getRange(r + 1, 2).setValue(config.nivel);
+            sheet.getRange(r + 1, 3).setValue(config.tendencia);
+            break;
+          }
+        }
+      }
+    }
+    
+    return ContentService.createTextOutput(JSON.stringify({"status": "sucesso"})).setMimeType(ContentService.MimeType.JSON);
+    
+  } catch (erro) {
+    return ContentService.createTextOutput(JSON.stringify({"status": "erro", "mensagem": erro.toString()})).setMimeType(ContentService.MimeType.JSON);
+  }
+}
